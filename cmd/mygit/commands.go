@@ -77,6 +77,7 @@ func hashFileCommand(filename string, flags map[string]bool) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error creating object file: %w", err)
 		}
+		defer objectFile.Close()
 
 		zlibWriter := zlib.NewWriter(objectFile)
 		defer zlibWriter.Close()
