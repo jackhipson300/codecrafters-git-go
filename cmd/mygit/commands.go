@@ -2,6 +2,8 @@ package main
 
 import (
 	"compress/zlib"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +28,7 @@ func initCommand() error {
 }
 
 func catFileCommand(blobSha string) (string, error) {
-	file, err := os.Open(".git/objects/" + blobSha[0:2] + "/" + blobSha[2:])
+	file, err := os.Open(".git/objects/" + blobSha[:2] + "/" + blobSha[2:])
 	if err != nil {
 		return "", fmt.Errorf("error opening object file: %w", err)
 	}
@@ -44,4 +46,37 @@ func catFileCommand(blobSha string) (string, error) {
 	}
 
 	return strings.Split(string(decompressed), "\000")[1], nil
+}
+
+func hashFileCommand(filename string, flags map[string]bool) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close()
+
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("error reading file: %w", err)
+	}
+
+	header := fmt.Sprintf("blob %d\000", len(contents))
+	contentsToCompress := append([]byte(header), contents...)
+
+	hash := sha1.Sum(contentsToCompress)
+
+	if flags["w"] {
+		objectFilename := fmt.Sprintf(".git/objects/%s/%s", hash[:2], hash[2:])
+		objectFile, err := os.Create(objectFilename)
+		if err != nil {
+			return "", fmt.Errorf("error creating object file: %w", err)
+		}
+
+		zlibWriter := zlib.NewWriter(objectFile)
+		if _, err := zlibWriter.Write(contentsToCompress); err != nil {
+			return "", fmt.Errorf("error writing to object file: %w", err)
+		}
+	}
+
+	return hex.EncodeToString(hash[:]), nil
 }

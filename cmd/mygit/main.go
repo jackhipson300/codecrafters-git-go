@@ -13,13 +13,18 @@ func main() {
 	}
 
 	flags := map[string]bool{}
+	args := []string{}
 	for _, arg := range os.Args {
-		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
-			flags[arg[1:]] = true
+		if strings.HasPrefix(arg, "-") {
+			if len(arg) > 0 {
+				flags[arg[1:]] = true
+			}
+		} else {
+			args = append(args, arg)
 		}
 	}
 
-	args := os.Args[1:]
+	fmt.Println(args)
 
 	var err error
 	var response string
@@ -29,7 +34,9 @@ func main() {
 	case "init":
 		err = initCommand()
 	case "cat-file":
-		response, err = catFileCommand(args[2])
+		response, err = catFileCommand(args[1])
+	case "hash-file":
+		response, err = hashFileCommand(args[1], flags)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)
