@@ -64,19 +64,26 @@ func hashFileCommand(filename string, flags map[string]bool) (string, error) {
 	contentsToCompress := append([]byte(header), contents...)
 
 	hash := sha1.Sum(contentsToCompress)
+	hashStr := hex.EncodeToString(hash[:])
 
 	if flags["w"] {
-		objectFilename := fmt.Sprintf(".git/objects/%s/%s", hash[:2], hash[2:])
+		objectDir := fmt.Sprintf(".git/objects/%s", hashStr[:2])
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", fmt.Errorf("error creating object file directory: %w", err)
+		}
+
+		objectFilename := fmt.Sprintf(".git/objects/%s/%s", hashStr[:2], hashStr[2:])
 		objectFile, err := os.Create(objectFilename)
 		if err != nil {
 			return "", fmt.Errorf("error creating object file: %w", err)
 		}
 
 		zlibWriter := zlib.NewWriter(objectFile)
+		defer zlibWriter.Close()
 		if _, err := zlibWriter.Write(contentsToCompress); err != nil {
 			return "", fmt.Errorf("error writing to object file: %w", err)
 		}
 	}
 
-	return hex.EncodeToString(hash[:]), nil
+	return hashStr, nil
 }

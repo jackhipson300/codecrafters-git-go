@@ -24,7 +24,7 @@ func main() {
 		}
 	}
 
-	fmt.Println(args)
+	args = args[1:]
 
 	var err error
 	var response string
@@ -35,7 +35,7 @@ func main() {
 		err = initCommand()
 	case "cat-file":
 		response, err = catFileCommand(args[1])
-	case "hash-file":
+	case "hash-object":
 		response, err = hashFileCommand(args[1], flags)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
