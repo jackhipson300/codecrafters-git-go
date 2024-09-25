@@ -24,7 +24,7 @@ func main() {
 		}
 	}
 
-	args = args[1:]
+	args = args[2:]
 
 	var err error
 	var response string
@@ -34,9 +34,11 @@ func main() {
 	case "init":
 		err = initCommand()
 	case "cat-file":
-		response, err = catFileCommand(args[1])
+		response, err = catFileCommand(args[0])
 	case "hash-object":
-		response, err = hashFileCommand(args[1], flags)
+		response, err = hashFileCommand(args[0], flags)
+	case "ls-tree":
+		response, err = lsTreeCommand(args[0], flags)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)

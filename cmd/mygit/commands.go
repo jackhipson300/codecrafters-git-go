@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"compress/zlib"
 	"crypto/sha1"
 	"encoding/hex"
@@ -45,7 +46,7 @@ func catFileCommand(blobSha string) (string, error) {
 		return "", fmt.Errorf("error decompressing file: %w", err)
 	}
 
-	return strings.Split(string(decompressed), "\000")[1], nil
+	return strings.Split(string(decompressed), "\x00")[1], nil
 }
 
 func hashFileCommand(filename string, flags map[string]bool) (string, error) {
@@ -60,7 +61,7 @@ func hashFileCommand(filename string, flags map[string]bool) (string, error) {
 		return "", fmt.Errorf("error reading file: %w", err)
 	}
 
-	header := fmt.Sprintf("blob %d\000", len(contents))
+	header := fmt.Sprintf("blob %d\x00", len(contents))
 	contentsToCompress := append([]byte(header), contents...)
 
 	hash := sha1.Sum(contentsToCompress)
@@ -87,4 +88,41 @@ func hashFileCommand(filename string, flags map[string]bool) (string, error) {
 	}
 
 	return hashStr, nil
+}
+
+func lsTreeCommand(treeSha string, flags map[string]bool) (string, error) {
+	treeFilename := fmt.Sprintf(".git/objects/%s/%s", treeSha[:2], treeSha[2:])
+	treeFile, err := os.Open(treeFilename)
+	if err != nil {
+		return "", fmt.Errorf("error opening tree file: %w", err)
+	}
+	defer treeFile.Close()
+
+	zlibReader, err := zlib.NewReader(treeFile)
+	if err != nil {
+		return "", fmt.Errorf("error reading tree file: %w", err)
+	}
+	defer zlibReader.Close()
+
+	output := ""
+
+	reader := bufio.NewReader(zlibReader)
+	reader.ReadBytes('\x00')
+	for {
+		if _, err := reader.ReadString(' '); err == io.EOF {
+			break
+		}
+
+		filename, err := reader.ReadString('\x00')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("error parsing tree: %w", err)
+		}
+
+		output += filename[:len(filename)-1] + "\n"
+	}
+
+	return output, nil
 }
