@@ -7,9 +7,17 @@ import (
 )
 
 func main() {
+	var err error
+	var response string
+
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: mygit <command> [<args>...]\n")
 		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to read cwd %s\n", err.Error())
 	}
 
 	flags := map[string]bool{}
@@ -26,9 +34,6 @@ func main() {
 
 	args = args[2:]
 
-	var err error
-	var response string
-
 	command := os.Args[1]
 	switch command {
 	case "init":
@@ -36,9 +41,11 @@ func main() {
 	case "cat-file":
 		response, err = catFileCommand(args[0])
 	case "hash-object":
-		response, err = hashFileCommand(args[0], flags)
+		response, err = hashFileCommand(args[0], flags["w"])
 	case "ls-tree":
-		response, err = lsTreeCommand(args[0], flags)
+		response, err = lsTreeCommand(args[0])
+	case "write-tree":
+		response, err = writeTreeCommand(cwd)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)

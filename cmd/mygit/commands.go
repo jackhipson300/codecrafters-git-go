@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"compress/zlib"
-	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -49,48 +48,22 @@ func catFileCommand(blobSha string) (string, error) {
 	return strings.Split(string(decompressed), "\x00")[1], nil
 }
 
-func hashFileCommand(filename string, flags map[string]bool) (string, error) {
-	file, err := os.Open(filename)
+func hashFileCommand(filename string, write bool) (string, error) {
+	contents, hash, err := fileToBlob(filename)
 	if err != nil {
-		return "", fmt.Errorf("error opening file: %w", err)
-	}
-	defer file.Close()
-
-	contents, err := io.ReadAll(file)
-	if err != nil {
-		return "", fmt.Errorf("error reading file: %w", err)
+		return "", fmt.Errorf("error computing file hash: %w", err)
 	}
 
-	header := fmt.Sprintf("blob %d\x00", len(contents))
-	contentsToCompress := append([]byte(header), contents...)
+	if write {
+		writeBlobFile(contents, hash)
+	}
 
-	hash := sha1.Sum(contentsToCompress)
 	hashStr := hex.EncodeToString(hash[:])
-
-	if flags["w"] {
-		objectDir := fmt.Sprintf(".git/objects/%s", hashStr[:2])
-		if err := os.MkdirAll(objectDir, 0755); err != nil {
-			return "", fmt.Errorf("error creating object file directory: %w", err)
-		}
-
-		objectFilename := fmt.Sprintf(".git/objects/%s/%s", hashStr[:2], hashStr[2:])
-		objectFile, err := os.Create(objectFilename)
-		if err != nil {
-			return "", fmt.Errorf("error creating object file: %w", err)
-		}
-		defer objectFile.Close()
-
-		zlibWriter := zlib.NewWriter(objectFile)
-		defer zlibWriter.Close()
-		if _, err := zlibWriter.Write(contentsToCompress); err != nil {
-			return "", fmt.Errorf("error writing to object file: %w", err)
-		}
-	}
 
 	return hashStr, nil
 }
 
-func lsTreeCommand(treeSha string, flags map[string]bool) (string, error) {
+func lsTreeCommand(treeSha string) (string, error) {
 	treeFilename := fmt.Sprintf(".git/objects/%s/%s", treeSha[:2], treeSha[2:])
 	treeFile, err := os.Open(treeFilename)
 	if err != nil {
@@ -125,4 +98,10 @@ func lsTreeCommand(treeSha string, flags map[string]bool) (string, error) {
 	}
 
 	return output, nil
+}
+
+func writeTreeCommand(dir string) (hash string, err error) {
+	rawHash, err := writeTreeRecursive(dir)
+	hash = hex.EncodeToString(rawHash[:])
+	return
 }
