@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -46,6 +47,16 @@ func main() {
 		response, err = lsTreeCommand(args[0])
 	case "write-tree":
 		response, err = writeTreeCommand(cwd)
+	case "commit-tree":
+		response, err = commitTreeCommand(
+			args[0],
+			args[1],
+			args[2],
+			"Jack Hipson",
+			"not@real.email",
+			time.Now().UnixMilli(),
+			"-0500",
+		)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)

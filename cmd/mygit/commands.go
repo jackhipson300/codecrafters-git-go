@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"compress/zlib"
+	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -55,7 +56,7 @@ func hashFileCommand(filename string, write bool) (string, error) {
 	}
 
 	if write {
-		writeBlobFile(contents, hash)
+		writeGitObject(contents, hash)
 	}
 
 	hashStr := hex.EncodeToString(hash[:])
@@ -104,4 +105,38 @@ func writeTreeCommand(dir string) (hash string, err error) {
 	rawHash, err := writeTreeRecursive(dir)
 	hash = hex.EncodeToString(rawHash[:])
 	return
+}
+
+func commitTreeCommand(
+	treeSha string,
+	commitSha string,
+	message string,
+	authorName string,
+	authorEmail string,
+	timestamp int64,
+	timezone string,
+) (string, error) {
+	commit := fmt.Sprintf("tree %s\nparent %s\nauthor %s <%s> %d %s\ncommitter %s <%s> %d %s\n\n%s\n",
+		treeSha,
+		commitSha,
+		authorName,
+		authorEmail,
+		timestamp,
+		timezone,
+		authorName,
+		authorEmail,
+		timestamp,
+		timezone,
+		message,
+	)
+	commitObj := contentsToGitObject([]byte(commit), "commit")
+	hash := sha1.Sum(commitObj)
+
+	if err := writeGitObject(commitObj, hash); err != nil {
+		return "", err
+	}
+
+	hashStr := hex.EncodeToString(hash[:])
+
+	return hashStr, nil
 }
