@@ -57,6 +57,8 @@ func main() {
 			time.Now().UnixMilli(),
 			"-0500",
 		)
+	case "clone":
+		response, err = cloneCommand(args[0], args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)

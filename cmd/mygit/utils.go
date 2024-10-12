@@ -1,59 +1,27 @@
 package main
 
 import (
-	"compress/zlib"
-	"crypto/sha1"
+	"bufio"
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 )
 
-func contentsToGitObject(contents []byte, objType string) (object []byte) {
-	header := fmt.Sprintf("%s %d\x00", objType, len(contents))
-	object = append([]byte(header), contents...)
-	return
-}
-
-func fileToBlob(filename string) (blob []byte, hash [20]byte, err error) {
+func readFile(filename string) (contents []byte, err error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return
 	}
 	defer file.Close()
 
-	contents, err := io.ReadAll(file)
+	contents, err = io.ReadAll(file)
 	if err != nil {
 		return
 	}
 
-	blob = contentsToGitObject(contents, "blob")
-	hash = sha1.Sum(blob)
-
 	return
-}
-
-func writeGitObject(contents []byte, hash [20]byte) error {
-	hashStr := hex.EncodeToString(hash[:])
-	objectDir := fmt.Sprintf(".git/objects/%s", hashStr[:2])
-	if err := os.MkdirAll(objectDir, 0755); err != nil {
-		return fmt.Errorf("error creating object file directory: %w", err)
-	}
-
-	objectFilename := fmt.Sprintf(".git/objects/%s/%s", hashStr[:2], hashStr[2:])
-	objectFile, err := os.Create(objectFilename)
-	if err != nil {
-		return fmt.Errorf("error creating object file: %w", err)
-	}
-	defer objectFile.Close()
-
-	zlibWriter := zlib.NewWriter(objectFile)
-	defer zlibWriter.Close()
-	if _, err := zlibWriter.Write(contents); err != nil {
-		return fmt.Errorf("error writing to object file: %w", err)
-	}
-
-	return nil
 }
 
 func writeTreeRecursive(dir string) ([20]byte, error) {
@@ -82,11 +50,11 @@ func writeTreeRecursive(dir string) ([20]byte, error) {
 		} else {
 			mode = "100644"
 			var contents []byte
-			contents, hash, err = fileToBlob(entryName)
+			contents, err = readFile(entryName)
 			if err != nil {
 				return rawHash, err
 			}
-			if err := writeGitObject(contents, hash); err != nil {
+			if err := createAndWriteGitObject("blob", contents); err != nil {
 				return rawHash, err
 			}
 		}
@@ -94,14 +62,77 @@ func writeTreeRecursive(dir string) ([20]byte, error) {
 		output = append(output, hash[:]...)
 	}
 
-	header := []byte(fmt.Sprintf("tree %d\x00", len(output)))
-	tree := append(header, output...)
-
-	rawHash = sha1.Sum(tree)
-
-	if err := writeGitObject(tree, rawHash); err != nil {
+	if err := createAndWriteGitObject("tree", output); err != nil {
 		return rawHash, err
 	}
 
 	return rawHash, err
+}
+
+func readTree(rawTree []byte) (tree Tree, err error) {
+	_, treeHash := createGitObject("tree", rawTree)
+	tree.hashStr = hex.EncodeToString(treeHash[:])
+
+	reader := bufio.NewReader(bytes.NewReader(rawTree))
+	for {
+		_type, err := reader.ReadString(' ')
+		if err == io.EOF {
+			break
+		}
+
+		name, err := reader.ReadString('\x00')
+		if err == io.EOF {
+			break
+		}
+
+		hash := make([]byte, 20)
+		_, err = reader.Read(hash)
+		if err == io.EOF {
+			break
+		}
+
+		tree.entries = append(tree.entries, TreeEntry{
+			_type:   _type[:len(_type)-1],
+			name:    name[:len(name)-1],
+			hashStr: hex.EncodeToString(hash[:]),
+		})
+	}
+
+	return
+}
+
+type TreeEntry struct {
+	_type   string
+	name    string
+	hashStr string
+}
+
+type Tree struct {
+	hashStr string
+	entries []TreeEntry
+}
+
+type Blob struct {
+	hashStr  string
+	contents []byte
+}
+
+type Commit struct {
+	hashStr string
+	tree    string
+}
+
+type PackFile struct {
+	commits map[string]Commit
+	trees   map[string]Tree
+	blobs   map[string]Blob
+}
+
+func NewPackfile() PackFile {
+	packfile := PackFile{
+		commits: make(map[string]Commit),
+		trees:   make(map[string]Tree),
+		blobs:   make(map[string]Blob),
+	}
+	return packfile
 }
