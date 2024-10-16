@@ -38,7 +38,7 @@ func main() {
 	command := os.Args[1]
 	switch command {
 	case "init":
-		err = initCommand()
+		err = initCommand("")
 	case "cat-file":
 		response, err = catFileCommand(args[0])
 	case "hash-object":
@@ -58,14 +58,14 @@ func main() {
 			"-0500",
 		)
 	case "clone":
-		response, err = cloneCommand(args[0], args[1])
+		response, err = cloneCommand(args[0], args[1]+"/")
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)
 	}
 
 	if err != nil {
-		fmt.Printf("Error occurred while executing %s: %s", command, err.Error())
+		fmt.Printf("Error occurred while executing %s: %s\n", command, err.Error())
 		os.Exit(1)
 	}
 

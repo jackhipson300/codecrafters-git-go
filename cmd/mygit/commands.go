@@ -7,20 +7,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 )
 
-func initCommand() error {
-	for _, dir := range []string{".git", ".git/objects", ".git/refs"} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+func initCommand(dir string) error {
+	for _, currDir := range []string{".git", ".git/objects", ".git/refs"} {
+		if err := os.MkdirAll(fmt.Sprint(dir, currDir), 0755); err != nil {
 			return fmt.Errorf("error creating directory: %w", err)
 		}
 	}
 
 	headFileContents := []byte("ref: refs/heads/main\n")
-	if err := os.WriteFile(".git/HEAD", headFileContents, 0644); err != nil {
+	if err := os.WriteFile(fmt.Sprint(dir, ".git/HEAD"), headFileContents, 0644); err != nil {
 		return fmt.Errorf("error writing file: %w", err)
 	}
 
@@ -147,62 +146,28 @@ func commitTreeCommand(
 }
 
 func cloneCommand(url string, dir string) (string, error) {
+	initCommand(dir)
+
 	refs, err := discoverRefs(url)
 	if err != nil {
 		return "", fmt.Errorf("error discovering refs: %w", err)
 	}
 
-	body := ""
-	for _, ref := range refs {
-		fmt.Println("ref", ref)
-		refStr := fmt.Sprintf("want %s\n", ref)
-		refStr = fmt.Sprintf("%04x", len(refStr)+4) + refStr
-		body += refStr
-	}
-	body += "00000009done\n"
-
-	reqBody := bytes.NewBuffer([]byte(body))
-
-	resp, err := http.Post(fmt.Sprintf("%s/git-upload-pack", url), "application/x-git-upload-pack-request", reqBody)
+	rawPackfile, err := requestPackfile(refs, url)
 	if err != nil {
-		return "", fmt.Errorf("error making git-upload-pack post request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("http post request to git server failed with status code %d", resp.StatusCode)
+		return "", fmt.Errorf("error getting packfile: %w", err)
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("error reading git-upload-pack post response: %w", err)
-	}
-
-	packStartIndex := -1
-	for i, b := range respBody {
-		if b == 'P' {
-			if string(respBody[i:i+4]) == "PACK" {
-				packStartIndex = i + 4
-			}
-		}
-	}
-
-	if packStartIndex == -1 {
-		return "", fmt.Errorf("invalid pack data")
-	}
-
-	pack := respBody[packStartIndex:]
-
-	header := pack[:8]
-	compressedObjects := pack[8:]
+	header := rawPackfile[:8]
+	objects := rawPackfile[8:]
 
 	headerReader := bytes.NewReader(header)
 	var version, numObjects uint32
 	if err := binary.Read(headerReader, binary.BigEndian, &version); err != nil {
-		return "", err
+		return "", fmt.Errorf("error parsing packfile: %w", err)
 	}
 	if err := binary.Read(headerReader, binary.BigEndian, &numObjects); err != nil {
-		return "", err
+		return "", fmt.Errorf("error parsing packfile: %w", err)
 	}
 
 	if version != 2 {
@@ -210,28 +175,16 @@ func cloneCommand(url string, dir string) (string, error) {
 	}
 
 	packfile := NewPackfile()
-	objectsReader := bytes.NewReader(compressedObjects)
+	objectsReader := bytes.NewReader(objects)
 	for i := uint32(0); i < numObjects; i++ {
 		var currByte uint8
 		binary.Read(objectsReader, binary.BigEndian, &currByte)
 		objType := (currByte & 0x70) >> 4
+		readLengthEncodedIntRecursive(currByte&0x8f, 0, objectsReader)
 
-		size := uint64(currByte & 0x0f)
-		msb := currByte & 0x80
-
-		leftShift := uint64(4)
-		for msb > 0 {
-			binary.Read(objectsReader, binary.BigEndian, &currByte)
-			size += (uint64(currByte) & 0x7f) << leftShift
-
-			leftShift += 7
-			msb = currByte & 0x80
-		}
-
+		baseObjHash := make([]byte, 20)
 		if objType == 7 {
-			baseObjName := make([]byte, 20)
-			objectsReader.Read(baseObjName)
-			fmt.Printf("base obj: %x\n", baseObjName)
+			objectsReader.Read(baseObjHash)
 		}
 
 		zlibReader, err := zlib.NewReader(objectsReader)
@@ -246,8 +199,9 @@ func cloneCommand(url string, dir string) (string, error) {
 		}
 
 		switch objType {
-		case 1:
-			_, hash := createGitObject("commit", rawObj)
+		case OBJ_COMMIT:
+			commitObj, hash := createGitObject("commit", rawObj)
+			writeGitObjectToDir(commitObj, hash, dir)
 			hashStr := hex.EncodeToString(hash[:])
 			treeHeader := strings.Split(string(rawObj), "\n")[0]
 			treeHash := strings.Split(treeHeader, " ")[1]
@@ -255,25 +209,43 @@ func cloneCommand(url string, dir string) (string, error) {
 				hashStr: hashStr,
 				tree:    treeHash,
 			}
-		case 2:
+		case OBJ_TREE:
 			tree, err := readTree(rawObj)
 			if err != nil {
 				return "", fmt.Errorf("error parsing tree: %w", err)
 			}
+
+			createAndWriteGitObjectToDir("tree", rawObj, dir)
 			packfile.trees[tree.hashStr] = tree
-		case 3:
-			bytes, hash := createGitObject("blob", rawObj)
+		case OBJ_BLOB:
+			blobObj, hash := createGitObject("blob", rawObj)
+			writeGitObjectToDir(blobObj, hash, dir)
 			hashStr := hex.EncodeToString(hash[:])
 			packfile.blobs[hashStr] = Blob{
 				hashStr:  hashStr,
 				contents: rawObj,
 			}
-			fmt.Println(string(bytes))
-			fmt.Printf("%x\n", bytes)
+		case OBJ_REF_DELTA:
+			deltaReader := bytes.NewReader(rawObj)
+			/* The first section of the decompressed delta data are the base and result object
+			   sizes. We don't really need them to resolve deltas so we just ignore them here. */
+			readLengthEncodedInt(deltaReader)
+			readLengthEncodedInt(deltaReader)
+
+			instructions, _ := io.ReadAll(deltaReader)
+
+			packfile.deltas = append(packfile.deltas, Delta{
+				baseObjHash:  hex.EncodeToString(baseObjHash[:]),
+				instructions: instructions,
+			})
 		}
 	}
 
-	if err := cloneFromPackfile(packfile, refs[0]); err != nil {
+	if err := resolveDeltas(&packfile); err != nil {
+		fmt.Println("err", err.Error())
+	}
+
+	if err := cloneFromPackfile(packfile, refs[0], dir); err != nil {
 		fmt.Println("err", err.Error())
 	}
 

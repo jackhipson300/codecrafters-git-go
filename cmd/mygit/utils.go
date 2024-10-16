@@ -3,70 +3,70 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 )
 
-func readFile(filename string) (contents []byte, err error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return
-	}
-	defer file.Close()
+const OBJ_COMMIT = 1
+const OBJ_TREE = 2
+const OBJ_BLOB = 3
+const OBJ_REF_DELTA = 7
 
-	contents, err = io.ReadAll(file)
-	if err != nil {
-		return
-	}
+const DELTA_REF_INSERT_INSTRUCTION = 0
+const DELTA_REF_COPY_INSTRUCTION = 1
 
-	return
+type TreeEntry struct {
+	_type   string
+	name    string
+	hashStr string
 }
 
-func writeTreeRecursive(dir string) ([20]byte, error) {
-	var rawHash [20]byte
+type Tree struct {
+	hashStr string
+	entries []TreeEntry
+}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return rawHash, fmt.Errorf("error reading directory: %w", err)
+type Blob struct {
+	hashStr  string
+	contents []byte
+}
+
+type Commit struct {
+	hashStr string
+	tree    string
+}
+
+type Delta struct {
+	baseObjHash  string
+	instructions []byte
+}
+
+type PackFile struct {
+	commits map[string]Commit
+	trees   map[string]Tree
+	blobs   map[string]Blob
+	deltas  []Delta
+}
+
+func NewPackfile() PackFile {
+	packfile := PackFile{
+		commits: make(map[string]Commit),
+		trees:   make(map[string]Tree),
+		blobs:   make(map[string]Blob),
+		deltas:  []Delta{},
 	}
+	return packfile
+}
 
-	output := []byte{}
-	for _, entry := range entries {
-		if entry.Name() == ".git" {
-			continue
-		}
+func createGitObject(objType string, contents []byte) (object []byte, hash [20]byte) {
+	header := []byte(fmt.Sprintf("%s %d\x00", objType, len(contents)))
+	object = append(header, contents...)
 
-		var hash [20]byte
-		var mode string
-		entryName := dir + "/" + entry.Name()
-		if entry.IsDir() {
-			mode = "40000"
-			hash, err = writeTreeRecursive(entryName)
-			if err != nil {
-				return rawHash, err
-			}
-		} else {
-			mode = "100644"
-			var contents []byte
-			contents, err = readFile(entryName)
-			if err != nil {
-				return rawHash, err
-			}
-			if err := createAndWriteGitObject("blob", contents); err != nil {
-				return rawHash, err
-			}
-		}
-		output = append(output, []byte(fmt.Sprintf("%s %s\x00", mode, entry.Name()))...)
-		output = append(output, hash[:]...)
-	}
-
-	if err := createAndWriteGitObject("tree", output); err != nil {
-		return rawHash, err
-	}
-
-	return rawHash, err
+	hash = sha1.Sum(object)
+	return
 }
 
 func readTree(rawTree []byte) (tree Tree, err error) {
@@ -101,38 +101,23 @@ func readTree(rawTree []byte) (tree Tree, err error) {
 	return
 }
 
-type TreeEntry struct {
-	_type   string
-	name    string
-	hashStr string
+func readLengthEncodedInt(reader io.Reader) (num uint64, err error) {
+	var currByte uint8
+	binary.Read(reader, binary.BigEndian, &currByte)
+	return readLengthEncodedIntRecursive(currByte, 0, reader)
 }
 
-type Tree struct {
-	hashStr string
-	entries []TreeEntry
-}
+func readLengthEncodedIntRecursive(currByte uint8, num uint64, reader io.Reader) (uint64, error) {
+	leftShift := uint64(4)
+	num += (uint64(currByte) & 0x7f) << leftShift
 
-type Blob struct {
-	hashStr  string
-	contents []byte
-}
+	leftShift += 7
+	msb := currByte & 0x80
 
-type Commit struct {
-	hashStr string
-	tree    string
-}
-
-type PackFile struct {
-	commits map[string]Commit
-	trees   map[string]Tree
-	blobs   map[string]Blob
-}
-
-func NewPackfile() PackFile {
-	packfile := PackFile{
-		commits: make(map[string]Commit),
-		trees:   make(map[string]Tree),
-		blobs:   make(map[string]Blob),
+	if msb == 0 {
+		return num, nil
 	}
-	return packfile
+
+	binary.Read(reader, binary.BigEndian, &currByte)
+	return readLengthEncodedIntRecursive(currByte, num, reader)
 }
